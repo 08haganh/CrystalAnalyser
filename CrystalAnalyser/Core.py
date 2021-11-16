@@ -3,7 +3,6 @@
 from CONFIG import CONFIG, vdw_radii, atomic_mass
 # DEPENDENCIES
 import re
-
 import numpy as np
 import pandas as pd
 import networkx as nx
@@ -21,6 +20,8 @@ class CifReader(CifParser):
         self.cif_dict = self.as_dict()[self.identifier]
         
     def supercell_to_mol2(self,fname,supercell_size,preserve_labelling=True):
+        # Can have issues with not writing any bonds to mol2 file
+        # however this does not occur often
         name = fname.split('.')[0]
         struc = self.get_structures()[0]
         struc.make_supercell(supercell_size, to_unit_cell=False)
@@ -90,16 +91,16 @@ class CifReader(CifParser):
 
 ############################################# MOL2READER #############################################
 class Mol2Reader():
-    def __init__(self,path,n_atoms=False):
+    def __init__(self,path,n_atoms=False,add_rings_as_atoms=False,complete_molecules=False):
         self.path = path
         self.file = open(self.path,'r')
         self.n_atoms = n_atoms
         self.atoms = []
         self.bonds = []
         self.molecules = []
-        self.generate_molecules()
+        self.generate_molecules(add_rings_as_atoms,complete_molecules)
         
-    def generate_molecules(self):
+    def generate_molecules(self,add_rings_as_atoms,complete_molecules):
         tripos_atom = False
         tripos_bond = False
         for line in self.file.readlines():
@@ -132,7 +133,7 @@ class Mol2Reader():
                 self.atoms[bond_atom_number_2-1].neighbours.append(self.atoms[bond_atom_number_1-1])
                 self.bonds.append(Bond(bond_atom1,bond_atom2,bond_type,bond_number))
     
-        supermolecule = Molecule(self.atoms,self.bonds,add_rings = False,add_rings_as_atoms=False)
+        #supermolecule = Molecule(self.atoms,self.bonds,add_rings = False,add_rings_as_atoms=False)
         supergraph = nx.Graph()
         supergraph.add_nodes_from(self.atoms)
         supergraph.add_edges_from([(bond.atom1,bond.atom2,{'type':bond.type}) for bond in self.bonds])
@@ -143,12 +144,15 @@ class Mol2Reader():
             pass
         else:  
             n_atoms = max([len(subgraph.nodes) for subgraph in subgraphs])
-        subgraphs = [subgraph for subgraph in subgraphs if len(subgraph.nodes) == n_atoms]
+        if not complete_molecules:
+            subgraphs = [subgraph for subgraph in subgraphs if len(subgraph.nodes) == n_atoms]
+        else:
+            subgraphs = subgraphs
         for graph in subgraphs:
             bonds = []
             for edge in graph.edges:
                 bonds.append(Bond(edge[0],edge[1],supergraph[edge[0]][edge[1]]['type']))
-            mol = Molecule(list(graph.nodes),bonds)
+            mol = Molecule(list(graph.nodes),bonds,add_rings_as_atoms=add_rings_as_atoms)
             self.molecules.append(mol)
         for mol in self.molecules:
             for atom in mol.atoms:
@@ -206,7 +210,7 @@ class Bond():
 
 ############################################# MOLECULE #######################################################
 class Molecule():
-    def __init__(self,atoms,bonds,add_rings=True,add_cogs=True,add_planes=True,add_rings_as_atoms=True,
+    def __init__(self,atoms,bonds,add_rings=True,add_cogs=True,add_planes=True,add_rings_as_atoms=False,
                  canonicalise_atom_order=True):
         self.atoms = atoms
         self.bonds = bonds
@@ -269,7 +273,7 @@ class Molecule():
     
     def add_ring_systems(self):
         self.ring_systems = Molecule([atom for ring in self.ring_atoms for atom in ring],
-                                          [bond for ring in self.ring_bonds for bond in ring])
+                                          [bond for ring in self.ring_bonds for bond in ring],add_rings_as_atoms=False)
         self.ring_systems = self.ring_systems.get_components()
     
     def add_peripheries(self):
@@ -323,7 +327,7 @@ class Molecule():
     def canonicalise_atom_order(self):
         atom_labels = np.array([atom.label for atom in self.atoms])
         order = np.argsort(atom_labels)
-        self.atoms = np.array(self.atoms).tolist()
+        self.atoms = np.array(self.atoms)[order].tolist()
     ############################################### Boring IO stuff ###########################################
         
     def to_edgelist(self):
@@ -340,8 +344,20 @@ class Molecule():
     def to_mol2(self):
         pass
     
-    def to_xyz(self):
-        pass
+    def to_xyz(self,fname):
+        split = fname.split('.')
+        name = split[0] if len(split) == 1 else split[:-1]
+        file = open(name+'.xyz','w')
+        n_atoms = len([atom for atom in self.atoms])
+        file.write(f'{n_atoms}\n')
+        for atom in self.atoms:
+            x, y, z = atom.coordinates
+            if 'ring' in atom.symbol:
+                file.write(f'Ti {x} {y} {z}\n')
+            else:
+                file.write(f'{atom.symbol} {x} {y} {z}\n')
+        file.close()
+
     
     def to_rdkit(self):
         pass
@@ -394,6 +410,9 @@ class Supercell():
         self.molecule_interactions = pd.DataFrame()
     
     def add_atom_interactions(self,central_only=True,atom_distance_cutoff=5.5):
+        # Calculates the atomic interactions between atoms in the supercell that are within a cutoff distance
+        # this is a very time consuming function, as such only atom interactions around the central molecule is mapped
+        # for structures with more than one unique molecular species, central only should be set to False
         if central_only:
             mol1_idxs = []
             mol2_idxs = []
@@ -489,6 +508,8 @@ class Supercell():
             self.atom_interactions.set_index(['mol1_idx','mol2_idx'],inplace=True)    
                     
     def add_geometric_interactions(self,functions=[]):
+        # populates geometric interactions between all pairs of molecules in the supercell
+        # must pass the list of functions 
         for i, mol1 in enumerate(self.molecules[:-1],0):
             for j, mol2 in enumerate(self.molecules[i+1:],i+1):
                 info = pd.Series(dtype=object)
@@ -502,6 +523,7 @@ class Supercell():
                 self.geometric_interactions = self.geometric_interactions.append(info)
     
     def get_central_molecule(self,return_idx=False):
+        # returns the molecules closest to the centre of geometry of the supercell
         mol_cogs = [mol.cog for mol in self.molecules]
         cog = self.centre_of_geometry()
         disps = mol_cogs - cog
@@ -514,6 +536,7 @@ class Supercell():
             return central_molecule
                 
     def centroid_distance(self,mol1_idx,mol2_idx):
+        # calculates the centroid distance between two molecules in the supercell
         info = pd.Series(dtype=object)
         cog1 = self.molecules[mol1_idx].cog
         cog2 = self.molecules[mol2_idx].cog
@@ -526,6 +549,7 @@ class Supercell():
         return info
     
     def interplanar_angle(self,mol1_idx,mol2_idx):
+        # calculates intperplanar angle between two molecules in the supercell
         info = pd.Series(dtype=object)
         plane1 = self.molecules[mol1_idx].plane
         plane2 = self.molecules[mol2_idx].plane
@@ -535,6 +559,8 @@ class Supercell():
         return info
     
     def planar_offset(self,mol1_idx,mol2_idx):
+        # calculates projection vector, and vertical and horizontal planar offsets between two molecules
+        # in the supercell
         info = pd.Series(dtype=object)
         cog1 = self.molecules[mol1_idx].cog
         cog2 = self.molecules[mol2_idx].cog
@@ -553,9 +579,11 @@ class Supercell():
         return info
     
     def quaternion(self):
+        # calculates quaturnion between two molecules in the supercell
         pass
         
     def combine_atom_interactions(self,only_unique=False):
+        # combines single atom interactions to molecular level
         forms_bonds = ((self.atom_interactions.hydrogen_bond > 0) |
                    (self.atom_interactions.pi_bond > 0) |
                    (self.atom_interactions.halogen_bond > 0) |
@@ -585,6 +613,8 @@ class Supercell():
             self.combined_interactions.drop_duplicates(inplace=True,keep='first')
             
     def add_molecule_interactions(self):
+        # populates geometric interactions with combined interactions
+        # matched by centroid distance
         temp_atoms = self.combined_interactions.copy()
         temp_geometric = self.geometric_interactions.copy()
         cds = pd.DataFrame(temp_geometric.centroid_distance)
@@ -596,6 +626,7 @@ class Supercell():
         self.molecule_interactions.fillna(0,inplace=True)
         
     def centre_of_geometry(self):
+        # centre of geometry of all molecules in the supercell
         mol_cogs = []
         for mol in self.molecules:
             mol_cogs.append(mol.cog)
@@ -603,8 +634,8 @@ class Supercell():
         return np.average(mol_cogs,axis=0)
     
     def sanitise_interactions(self,interaction_type='geometric',inplace=False):
-        # Buggy, overwrites self.geoemtric_interactions even when undesired
-        # Not a real issue but annoying
+        # Removes small numerical differences between interactions by replacing with first incident
+        # required for matching interactions for joins, unique interactions, etc
         if interaction_type == 'geometric':
             interactions = self.geometric_interactions.copy()
         if interaction_type == 'atom':
@@ -630,6 +661,28 @@ class Supercell():
                 self.geometric_interactions = interactions.copy()
             if interaction_type == 'atom':
                 self.atom_interactions = interactions.copy()
+
+    def to_xyz(self,fname,for_point_cloud=False):
+        split = fname.split('.')
+        name = split[0] if len(split) == 1 else split[:-1]
+        file = open(name+'.xyz', 'w')
+        if not for_point_cloud:
+            atom_count = len([atom for mol in self.molecules for atom in mol.atoms])
+            file.write(f'{atom_count}\n')
+            for mol in self.molecules:
+                for atom in mol.atoms:
+                    x, y, z = atom.coordinates
+                    if 'ring' in atom.symbol:
+                        file.write(f'Ti {x} {y} {z}\n')
+                    else:
+                        file.write(f'{atom.symbol} {x} {y} {z}\n')
+            file.close()
+        else:
+            for mol in self.molecules:
+                for atom in mol.atoms:
+                    x, y, z = atom.coordinates
+                    file.write(f'{x} {y} {z}\n')
+            file.close()
 
 ################################################# INTERACTION DICT ######################################################
 class InteractionDict():
