@@ -1,6 +1,6 @@
 # CrystalAnalyser Python Package
 # CONFIG
-from CONFIG import CONFIG, vdw_radii, atomic_mass
+from CONFIG import CONFIG, vdw_radii, atomic_mass, atomic_number, rdkit_bond_types
 # DEPENDENCIES
 import re
 import numpy as np
@@ -10,6 +10,7 @@ import numpy.linalg as la
 from openbabel import openbabel
 from pymatgen.io.cif import CifParser
 from pymatgen.io.xyz import XYZ
+from rdkit import Chem
 
 ############################################# CIFREADER #############################################
 class CifReader(CifParser):
@@ -166,12 +167,12 @@ class Mol2Reader():
 
 ############################################# ATOM #############################################
 class Atom():
-    def __init__(self,atom_label,atom_coordinates,atom_symbol='',atom_type='',atom_number=np.nan):
+    def __init__(self,atom_label,atom_coordinates,atom_symbol='',atom_type='',atom_index=np.nan):
         self.label = atom_label
         self.coordinates = atom_coordinates
         self.symbol = atom_symbol
         self.type = atom_type
-        self.number = atom_number
+        self.number = atom_index
         self.interaction = False
         self.in_ring = False
         self.neighbours = []
@@ -179,6 +180,10 @@ class Atom():
             self.weight = atomic_mass[self.symbol]
         except:
             self.weight = 0
+        try:
+            self.number = atomic_number[self.symbol]
+        except:
+            self.number = 0
         try:
             self.vdw_radii = vdw_radii[self.symbol]
         except:
@@ -329,7 +334,6 @@ class Molecule():
         order = np.argsort(atom_labels)
         self.atoms = np.array(self.atoms)[order].tolist()
     ############################################### Boring IO stuff ###########################################
-        
     def to_edgelist(self):
         # atom1,atom2,edge_attribute
         pass
@@ -358,9 +362,23 @@ class Molecule():
                 file.write(f'{atom.symbol} {x} {y} {z}\n')
         file.close()
 
-    
     def to_rdkit(self):
-        pass
+        # adapted from https://github.com/maxhodak/keras-molecules
+        mol = Chem.RWMol()
+        node_to_idx = {}
+        for atom in self.atoms:
+            a = Chem.Atom(atom.number)
+            idx = mol.AddAtom(a)
+            node_to_idx[atom] = idx
+        for bond in self.bonds:
+            ifirst = node_to_idx[bond.atom1]
+            isecond = node_to_idx[bond.atom2]
+            print(bond.type, type(bond.type))
+            bond_type = rdkit_bond_types[bond.type]
+            mol.AddBond(ifirst,isecond,bond_type)
+
+        Chem.SanitizeMol(mol)
+        return mol.GetMol()
     
     def to_networkx(self):
         G = nx.Graph()
@@ -683,6 +701,14 @@ class Supercell():
                     x, y, z = atom.coordinates
                     file.write(f'{x} {y} {z}\n')
             file.close()
+
+    def to_mol2(self,fname,add_interactions=False):
+        # remember to add residue number as well so you can create a pymol script to turn the dummy bonds
+        # to dashes
+        pass
+
+    def unique_dimers_to_mol2(self,fname,add_interactions=False):
+        pass
 
 ################################################# INTERACTION DICT ######################################################
 class InteractionDict():

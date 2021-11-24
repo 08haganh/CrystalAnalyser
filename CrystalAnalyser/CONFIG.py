@@ -1,4 +1,5 @@
 # CONFIG FILE
+from rdkit import Chem
 
 # HYDROGEN BONDING
 HYDROGEN_BOND_DONORS = ['O','N','F','S','C']
@@ -128,3 +129,20 @@ atomic_mass = {
                 'Sc':44.9559, 'Ti':47.867, 'V':50.9415, 'Cr':51.9961, 'Mn':54.938,
                 'Fe':55.845, 'Ni':58.6934, 'Co':58.9332, 'Cu':63.546, 'Zn':65.39
                 }
+
+atomic_number = {
+                'H':1, 'He':2, 'Li':3, 'Be':4, 'B':5,
+                'C':6, 'N':7, 'O':8, 'F':9, 'Ne':10,
+                'Na':11, 'Mg':12, 'Al':13, 'Si':14, 'P':15,
+                'S':16, 'Cl':17, 'K':19, 'Ar':18, 'Ca':20,
+                'Sc':21, 'Ti':22, 'V':23, 'Cr':24, 'Mn':25,
+                'Fe':26, 'Ni':28, 'Co':27, 'Cu':29, 'Zn':30
+}
+
+rdkit_bond_types = {
+                    'ar':Chem.rdchem.BondType.AROMATIC,
+                    '1':Chem.rdchem.BondType.SINGLE,
+                    '2':Chem.rdchem.BondType.DOUBLE,
+                    '3':Chem.rdchem.BondType.TRIPLE
+
+}
